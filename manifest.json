@@ -1,0 +1,42 @@
+{
+  "id": "./",
+  "name": "Word Tiles",
+  "short_name": "Word Tiles",
+  "description": "Two-player pass-and-play word game on a 15x15 board, judged against the Collins word list. Works offline.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "display_override": ["standalone", "fullscreen"],
+  "orientation": "portrait",
+  "background_color": "#2E211A",
+  "theme_color": "#2E211A",
+  "lang": "en-GB",
+  "dir": "ltr",
+  "categories": ["games", "education"],
+  "icons": [
+    {
+      "src": "./icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./icon-maskable-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "./icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}
