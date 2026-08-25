@@ -1,7 +1,7 @@
 /* Word Tiles — offline cache.
    Bump CACHE whenever you upload a new index.html, or tablets will keep
    serving the old one. */
-const CACHE = 'word-tiles-v4';
+const CACHE = 'word-tiles-v6';
 
 const ASSETS = [
   './index.html',
