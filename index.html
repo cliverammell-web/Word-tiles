@@ -143,6 +143,36 @@ button.act.warn{background:#6B3228; border-color:#8A4436}
   font-family:inherit; font-size:.95rem; font-weight:600; padding:13px 30px;
   border-radius:9px; border:none; background:var(--gold); color:var(--walnut); cursor:pointer;
 }
+.askrow{display:flex; gap:10px; flex-wrap:wrap; justify-content:center; width:100%; max-width:330px}
+.ovl .askrow button{flex:1; min-width:130px; padding:13px 20px}
+.ovl .askrow button.ghost{
+  background:transparent; color:var(--ivory); border:1px solid #6B5340;
+}
+.ovl .askrow button.danger{background:#8A4436; color:#F7EFE2}
+.slots{display:flex; flex-direction:column; gap:8px; width:100%; max-width:340px}
+.slotrow{display:flex; gap:6px; align-items:stretch}
+.ovl .slots button.slot{
+  flex:1; display:flex; align-items:center; gap:12px; text-align:left;
+  padding:11px 14px; border-radius:9px; border:1px solid #6B5340;
+  background:var(--walnut-lt); color:var(--ivory); font-size:.85rem; font-weight:600;
+}
+.ovl .slots button.slot:disabled{opacity:.45; cursor:default}
+.slotnum{
+  font-family:Georgia,serif; font-size:1.35rem; font-weight:400; color:var(--gold);
+  min-width:20px; text-align:center;
+}
+.slotwrap{display:flex; flex-direction:column; gap:2px; overflow:hidden}
+.slotmain{white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.slotsub{font-size:.68rem; letter-spacing:.08em; text-transform:uppercase; color:#8A7461}
+.slot.free .slotmain{color:#8A7461; font-weight:400; font-style:italic}
+.ovl .slots button.slotdel{
+  flex:0 0 auto; padding:0 13px; border-radius:9px; border:1px solid #6B5340;
+  background:transparent; color:#B08070; font-size:1rem; font-weight:700;
+}
+.asknote{
+  font-size:.68rem; letter-spacing:.12em; text-transform:uppercase; color:#8A7461;
+  border-top:1px solid #4A382B; border-bottom:1px solid #4A382B; padding:7px 16px;
+}
 .picker{display:grid; grid-template-columns:repeat(6,1fr); gap:6px; max-width:300px; width:100%}
 .picker button{padding:11px 0; font-size:1rem; border-radius:5px; background:var(--bone); color:var(--ink)}
 .names{display:flex; flex-direction:column; gap:11px; width:100%; max-width:290px}
@@ -206,6 +236,13 @@ button.act.warn{background:#6B3228; border-color:#8A4436}
   .seglab{max-width:380px; font-size:.8rem}
   .ovl .seg button{font-size:1rem; padding:13px 6px}
   .rec{font-size:.95rem}
+  .slots{max-width:440px; gap:10px}
+  .ovl .slots button.slot{font-size:1rem; padding:14px 18px}
+  .slotnum{font-size:1.6rem; min-width:26px}
+  .slotsub{font-size:.75rem}
+  .askrow{max-width:430px; gap:14px}
+  .ovl .askrow button{min-width:170px; padding:15px 24px; font-size:1.05rem}
+  .asknote{font-size:.8rem; padding:9px 20px}
   .picker{max-width:430px; gap:9px}
   .picker button{font-size:1.3rem; padding:14px 0}
   .final{font-size:1.05rem}
@@ -247,6 +284,27 @@ button.act.warn{background:#6B3228; border-color:#8A4436}
   </div>
 
   <div class="foot"><span id="bagct">100 in bag</span><span id="turnlbl">Player 1's turn</span></div>
+</div>
+
+<!-- Save slots -->
+<div class="ovl" id="ovl-slots">
+  <h2 id="slot-title">Save game</h2>
+  <p id="slot-blurb"></p>
+  <div class="slots" id="slot-list"></div>
+  <div class="askrow">
+    <button class="ghost" onclick="closeSlots()">Cancel</button>
+  </div>
+</div>
+
+<!-- Yes / no questions, in the game's own dress rather than the browser's -->
+<div class="ovl" id="ovl-ask">
+  <h2 id="ask-title">Are you sure?</h2>
+  <p id="ask-body"></p>
+  <div class="asknote" id="ask-note"></div>
+  <div class="askrow">
+    <button class="ghost" id="ask-no" onclick="askDone(false)">Cancel</button>
+    <button id="ask-yes" onclick="askDone(true)">Confirm</button>
+  </div>
 </div>
 
 <!-- Who is playing -->
@@ -409,7 +467,7 @@ function applyNames(){
   render();
   setMsg(names[0]+' starts'+(solo?' against the computer on '+levelName()+'.':'.')
         +' The first word must cross the centre star.'
-        +(readSave()?' Or tap Resume game to pick up the saved one.':''));
+        +(usedSlots()?' Or tap Resume game to pick one up.':''));
 }
 ['nm0','nm1'].forEach(id=>document.addEventListener('keydown',e=>{
   if(e.key==='Enter'&&e.target&&e.target.id===id) applyNames();
@@ -493,7 +551,7 @@ function render(){
   document.getElementById('btn-xch').textContent=exchanging?'Confirm swap':'Exchange';
   document.getElementById('btn-xch').disabled=!exchanging&&bag.length<7;
   document.getElementById('btn-save').disabled=gameOver||exchanging;
-  document.getElementById('btn-resume').disabled=!readSave();
+  document.getElementById('btn-resume').disabled=!usedSlots();
 
   if(hidden||aiThinking)
     ['btn-play','btn-recall','btn-pass','btn-shuffle','btn-xch','btn-save']
@@ -789,8 +847,12 @@ function endGame(finisher, why){
   document.getElementById('ovl-end').classList.add('on');
 }
 
-function confirmNew(){
-  if(gameOver || confirm('Start a new game? The current one will be lost.')) newGame();
+async function confirmNew(){
+  if(gameOver || await ask({
+    title:'Start a new game?',
+    body:'The board, both scores and the tiles in hand will all be cleared.',
+    yes:'Start new game', no:'Keep playing', danger:true
+  })) newGame();
 }
 
 /* ─────────────  Zoom & pan  ─────────────
@@ -1111,13 +1173,30 @@ function sizeBoard(){
 }
 
 /* ─────────────  Save & resume  ─────────────
-   One slot, written only when you ask for it. Tiles still on the rack,
-   the bag order and whose turn it is all travel with the board. */
-const SAVE_KEY='wordtiles.save.v1';
+   Four numbered slots, written only when you ask. Tiles still on the
+   rack, the bag order and whose turn it is all travel with the board. */
+const SLOTS=4;
+const SLOT_KEY=n=>'wordtiles.slot.v1:'+n;
+const OLD_SAVE_KEY='wordtiles.save.v1';     // the single slot we used to keep
 
-function readSave(){
-  try{ const raw=localStorage.getItem(SAVE_KEY); return raw?JSON.parse(raw):null; }
+function readSlot(n){
+  try{ const raw=localStorage.getItem(SLOT_KEY(n)); return raw?JSON.parse(raw):null; }
   catch(e){ return null; }
+}
+function usedSlots(){
+  let n=0;
+  for(let i=1;i<=SLOTS;i++) if(readSlot(i)) n++;
+  return n;
+}
+
+/* Carry a game saved by the older single-slot version into slot 1. */
+function migrateSave(){
+  try{
+    const raw=localStorage.getItem(OLD_SAVE_KEY);
+    if(!raw) return;
+    if(!readSlot(1)) localStorage.setItem(SLOT_KEY(1), raw);
+    localStorage.removeItem(OLD_SAVE_KEY);
+  }catch(e){}
 }
 function savedWhen(s){
   const d=new Date(s.t);
@@ -1125,14 +1204,118 @@ function savedWhen(s){
        +' at '+d.toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'});
 }
 
+/* One line describing what is in a slot */
+function slotLine(s){
+  const n=Array.isArray(s.names)?s.names:DEFAULT_NAMES;
+  const sc=Array.isArray(s.scores)?s.scores:[0,0];
+  return n[0]+' '+sc[0]+' – '+sc[1]+' '+n[1];
+}
+
+/* ─────────────  The slot picker  ───────────── */
+let slotMode='save';
+
+function buildSlots(){
+  const list=document.getElementById('slot-list');
+  list.innerHTML='';
+  for(let i=1;i<=SLOTS;i++){
+    const s=readSlot(i);
+    const row=document.createElement('div'); row.className='slotrow';
+
+    const btn=document.createElement('button');
+    btn.className='slot'+(s?'':' free');
+    btn.id='slot-btn-'+i;
+    btn.onclick=()=>chooseSlot(i);
+    btn.disabled = slotMode==='resume' && !s;
+
+    const num=document.createElement('span');
+    num.className='slotnum'; num.textContent=i;
+
+    const wrap=document.createElement('span'); wrap.className='slotwrap';
+    const main=document.createElement('span'); main.className='slotmain';
+    main.textContent = s ? slotLine(s) : 'Empty';
+    wrap.appendChild(main);
+    if(s){
+      const sub=document.createElement('span'); sub.className='slotsub';
+      sub.textContent=savedWhen(s)+(s.solo?' · vs computer':'');
+      wrap.appendChild(sub);
+    }
+    btn.appendChild(num); btn.appendChild(wrap);
+    row.appendChild(btn);
+
+    if(s){
+      const del=document.createElement('button');
+      del.className='slotdel'; del.id='slot-del-'+i;
+      del.textContent='✕';
+      del.title='Delete slot '+i;
+      del.onclick=()=>deleteSlot(i);
+      row.appendChild(del);
+    }
+    list.appendChild(row);
+  }
+}
+
+function openSlots(mode){
+  slotMode=mode;
+  document.getElementById('slot-title').textContent =
+    mode==='save' ? 'Save to which slot?' : 'Which game shall we resume?';
+  document.getElementById('slot-blurb').textContent =
+    mode==='save' ? 'Pick a slot. Saving over one that is already in use will ask first.'
+                  : 'Empty slots are greyed out. The ✕ deletes a saved game.';
+  buildSlots();
+  document.getElementById('ovl-slots').classList.add('on');
+}
+function closeSlots(){ document.getElementById('ovl-slots').classList.remove('on'); }
+
+async function deleteSlot(n){
+  const s=readSlot(n);
+  if(!s) return;
+  if(!await ask({
+    title:'Delete slot '+n+'?',
+    body:'That saved game will be gone for good.',
+    note:slotLine(s)+' · '+savedWhen(s),
+    yes:'Delete it', no:'Keep it', danger:true
+  })) return;
+  try{ localStorage.removeItem(SLOT_KEY(n)); }catch(e){}
+  buildSlots();
+  render();
+  if(!usedSlots() && slotMode==='resume') closeSlots();
+}
+
+async function chooseSlot(n){
+  const s=readSlot(n);
+  if(slotMode==='save'){
+    if(s && !await ask({
+      title:'Replace slot '+n+'?',
+      body:'The game already in this slot will be written over.',
+      note:slotLine(s)+' · '+savedWhen(s),
+      yes:'Replace it', no:'Cancel', danger:true
+    })) return;
+    closeSlots();
+    writeSlot(n);
+    return;
+  }
+  if(!s) return;
+  const started = anyFixed()||scores[0]||scores[1];
+  if(started && !gameOver && !await ask({
+    title:'Resume this game?',
+    body:'The game currently on the board will be lost.',
+    note:slotLine(s)+' · '+savedWhen(s),
+    yes:'Resume it', no:'Cancel', danger:true
+  })) return;
+  closeSlots();
+  loadSlot(s, n);
+}
+
 function saveGame(){
   if(gameOver){ setMsg('The game has finished, so there is nothing to save.','bad'); return; }
   if(exchanging){ exchanging=false; xchSel=[]; }
   if(pending.length) recallAll();
-  const old=readSave();
-  if(old && !confirm('Replace the game saved on '+savedWhen(old)+'?')) return;
+  openSlots('save');
+}
+
+function writeSlot(n){
   try{
-    localStorage.setItem(SAVE_KEY, JSON.stringify({
+    localStorage.setItem(SLOT_KEY(n), JSON.stringify({
       t:Date.now(), names, solo, skill, board, racks, scores, bag, turn, scoreless, lastPlayed
     }));
   }catch(e){
@@ -1140,15 +1323,15 @@ function saveGame(){
     return;
   }
   render();
-  setMsg('Saved at '+names[turn]+"'s turn. Tap Resume game to come back to it.",'ok');
+  setMsg('Saved to slot '+n+' at '+names[turn]+"'s turn.",'ok');
 }
 
 function resumeGame(){
-  const s=readSave();
-  if(!s){ setMsg('There is no saved game yet. Tap Save game to make one.','bad'); return; }
-  const started = anyFixed()||scores[0]||scores[1];
-  if(started && !gameOver &&
-     !confirm('Resume the game saved on '+savedWhen(s)+'? The game on screen will be lost.')) return;
+  if(!usedSlots()){ setMsg('No games saved yet. Tap Save game to keep one.','bad'); return; }
+  openSlots('resume');
+}
+
+function loadSlot(s, n){
   if(Array.isArray(s.names)&&s.names.length===2) names=s.names.map(String);
   solo=!!s.solo; if(typeof s.skill==='number') skill=s.skill;
   saveSolo();
@@ -1160,17 +1343,17 @@ function resumeGame(){
   if(solo){
     if(turn===1){
       aiThinking=true; render();
-      setMsg('Saved game restored. The computer is thinking…');
+      setMsg('Slot '+n+' restored. The computer is thinking…');
       setTimeout(aiTurn, 300);
     } else {
-      setMsg('Saved game restored. Your turn.','ok');
+      setMsg('Slot '+n+' restored. Your turn.','ok');
     }
     return;
   }
 
   document.getElementById('hand-title').textContent=names[turn];
   document.getElementById('hand-note').textContent=
-    'Saved game restored. Tap when '+names[turn]+' is looking.';
+    'Slot '+n+' restored. Tap when '+names[turn]+' is looking.';
   document.getElementById('ovl-hand').classList.add('on');
 }
 
@@ -1179,13 +1362,54 @@ function setMsg(html,kind){
   const m=document.getElementById('msg');
   m.innerHTML=html; m.className='msg'+(kind?' '+kind:'');
 }
-function closeAll(){ document.querySelectorAll('.ovl').forEach(o=>o.classList.remove('on')); }
+function closeAll(){
+  if(askResolve) askDone(false);
+  document.querySelectorAll('.ovl').forEach(o=>o.classList.remove('on'));
+}
+
+/* ─────────────  Yes / no dialog  ─────────────
+   Replaces the browser's own confirm box, which announces the site name
+   and cannot be styled. Returns a promise resolving true or false. */
+let askResolve=null;
+
+function ask(opts){
+  return new Promise(resolve=>{
+    if(askResolve) askDone(false);
+    document.getElementById('ask-title').textContent=opts.title;
+    const body=document.getElementById('ask-body');
+    body.textContent=opts.body||'';
+    body.style.display=opts.body?'block':'none';
+    const note=document.getElementById('ask-note');
+    note.textContent=opts.note||'';
+    note.style.display=opts.note?'block':'none';
+    const yes=document.getElementById('ask-yes'), no=document.getElementById('ask-no');
+    yes.textContent=opts.yes||'Confirm';
+    no.textContent=opts.no||'Cancel';
+    yes.classList.toggle('danger', !!opts.danger);
+    askResolve=resolve;
+    document.getElementById('ovl-ask').classList.add('on');
+    setTimeout(()=>{ try{ yes.focus(); }catch(e){} }, 60);
+  });
+}
+
+function askDone(answer){
+  document.getElementById('ovl-ask').classList.remove('on');
+  const resolve=askResolve; askResolve=null;
+  if(resolve) resolve(answer);
+}
+
+document.addEventListener('keydown', e=>{
+  if(!askResolve) return;
+  if(e.key==='Escape'){ e.preventDefault(); askDone(false); }
+  else if(e.key==='Enter'){ e.preventDefault(); askDone(true); }
+});
 
 /* Offline cache. Fails quietly when opened straight from the file system. */
 if('serviceWorker' in navigator){
   window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js').catch(()=>{}));
 }
 
+migrateSave();
 newGame();
 if(window.ResizeObserver) new ResizeObserver(sizeBoard).observe(bView());
 else window.addEventListener('resize', sizeBoard);
