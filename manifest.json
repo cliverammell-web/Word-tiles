@@ -5,7 +5,11 @@
   "description": "Two-player pass-and-play word game on a 15x15 board, judged against the Collins word list. Works offline.",
   "start_url": "./",
   "scope": "./",
-  "display": "browser",
+  "display": "standalone",
+  "display_override": [
+    "standalone"
+  ],
+  "orientation": "any",
   "background_color": "#2E211A",
   "theme_color": "#2E211A",
   "lang": "en-GB",
