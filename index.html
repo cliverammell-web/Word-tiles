@@ -597,7 +597,11 @@ function render(){
   document.getElementById('btn-xch').textContent=exchanging?'Confirm swap':'Exchange';
   document.getElementById('btn-xch').disabled=!exchanging&&bag.length<7;
   document.getElementById('btn-save').disabled=gameOver||exchanging;
-  document.getElementById('btn-resume').disabled=!usedSlots();
+  // Stays available with nothing saved while sync is unconfigured, because
+  // this button is the only way in to sync setup. (typeof guard: render() runs
+  // before the sync block is evaluated.)
+  document.getElementById('btn-resume').disabled =
+    !usedSlots() && typeof sync!=='undefined' && sync.on();
 
   if(hidden||aiThinking)
     ['btn-play','btn-recall','btn-pass','btn-shuffle','btn-xch','btn-save']
