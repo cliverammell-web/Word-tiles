@@ -286,13 +286,59 @@ button.act.warn{background:#6B3228; border-color:#8A4436}
   <div class="foot"><span id="bagct">100 in bag</span><span id="turnlbl">Player 1's turn</span></div>
 </div>
 
+<style>
+.sync-bar{
+  display:flex; align-items:center; gap:10px; justify-content:space-between;
+  margin:14px 0 2px; padding:10px 12px; border-radius:10px;
+  background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12);
+  font-size:13px; text-align:left;
+}
+.sync-bar .sync-text{flex:1 1 auto; min-width:0; line-height:1.35;}
+.sync-bar .sync-dot{
+  width:9px; height:9px; border-radius:50%; flex:0 0 auto; background:#8a8a8a;
+}
+.sync-bar.s-idle .sync-dot{background:#5fd08a;}
+.sync-bar.s-syncing .sync-dot{background:#f0d070;}
+.sync-bar.s-pending .sync-dot{background:#f0d070;}
+.sync-bar.s-error .sync-dot{background:#f07070;}
+.sync-bar.s-offline .sync-dot{background:#9a9a9a;}
+.sync-bar button{flex:0 0 auto; font-size:12px; padding:6px 10px;}
+.sync-setup label{display:block; text-align:left; margin:10px 0 0;}
+.sync-setup input{width:100%; box-sizing:border-box; margin-top:4px;}
+.sync-note{font-size:12px; opacity:.75; text-align:left; margin:8px 0 0; line-height:1.4;}
+</style>
+
 <!-- Save slots -->
 <div class="ovl" id="ovl-slots">
   <h2 id="slot-title">Save game</h2>
   <p id="slot-blurb"></p>
   <div class="slots" id="slot-list"></div>
+  <div class="sync-bar" id="sync-bar" style="display:none">
+    <span class="sync-dot"></span>
+    <span class="sync-text" id="sync-text"></span>
+    <button class="ghost" id="sync-btn" onclick="syncBarAction()"></button>
+  </div>
   <div class="askrow">
     <button class="ghost" onclick="closeSlots()">Cancel</button>
+  </div>
+</div>
+
+<!-- Cloud sync setup -->
+<div class="ovl" id="ovl-sync">
+  <h2>Cloud sync</h2>
+  <p>Saved games follow you between devices. Enter the address of your sync worker and your token — once per device.</p>
+  <div class="sync-setup">
+    <label>Worker URL
+      <input id="sync-url" type="url" placeholder="https://crapps-sync.your-name.workers.dev" autocomplete="off" spellcheck="false">
+    </label>
+    <label>Token
+      <input id="sync-token" type="password" placeholder="Paste token" autocomplete="off" spellcheck="false">
+    </label>
+  </div>
+  <p class="sync-note" id="sync-setup-note"></p>
+  <div class="askrow">
+    <button class="ghost" onclick="closeSyncSetup()">Cancel</button>
+    <button onclick="connectSync()">Connect</button>
   </div>
 </div>
 
@@ -1262,6 +1308,7 @@ function openSlots(mode){
     mode==='save' ? 'Pick a slot. Saving over one that is already in use will ask first.'
                   : 'Empty slots are greyed out. The ✕ deletes a saved game.';
   buildSlots();
+  renderSyncBar();
   document.getElementById('ovl-slots').classList.add('on');
 }
 function closeSlots(){ document.getElementById('ovl-slots').classList.remove('on'); }
@@ -1275,7 +1322,11 @@ async function deleteSlot(n){
     note:slotLine(s)+' · '+savedWhen(s),
     yes:'Delete it', no:'Keep it', danger:true
   })) return;
-  try{ localStorage.removeItem(SLOT_KEY(n)); }catch(e){}
+  try{
+    if(s.gid) tombstone(s.gid);
+    localStorage.removeItem(SLOT_KEY(n));
+  }catch(e){}
+  syncTouch();
   buildSlots();
   render();
   if(!usedSlots() && slotMode==='resume') closeSlots();
@@ -1315,14 +1366,23 @@ function saveGame(){
 
 function writeSlot(n){
   try{
+    // Overwriting a slot retires the game that was in it. Without a tombstone
+    // the old game would simply return from the cloud at the next merge.
+    const prev=readSlot(n);
+    if(prev && prev.gid) tombstone(prev.gid);
     localStorage.setItem(SLOT_KEY(n), JSON.stringify({
-      t:Date.now(), names, solo, skill, board, racks, scores, bag, turn, scoreless, lastPlayed
+      // gid identifies this saved game wherever it ends up. Slot numbers are
+      // just positions and mean different things on different devices, so the
+      // merge works off gid instead.
+      gid:newGid(), t:Date.now(),
+      names, solo, skill, board, racks, scores, bag, turn, scoreless, lastPlayed
     }));
   }catch(e){
     setMsg('This browser would not store the save. Allow site storage and try again.','bad');
     return;
   }
   render();
+  syncTouch();
   setMsg('Saved to slot '+n+' at '+names[turn]+"'s turn.",'ok');
 }
 
@@ -1405,6 +1465,266 @@ document.addEventListener('keydown', e=>{
 });
 
 /* Offline cache. Fails quietly when opened straight from the file system. */
+
+/* ─────────────  Cloud sync  ─────────────
+   Saved games are merged rather than overwritten. Each save carries a gid, so
+   two devices that both used slot 2 for different games keep both games: the
+   newer holds the slot, the other moves to a free one. Deletions travel as
+   tombstones so a removal on one device is not undone by another. */
+const SYNC_KEY='wordtiles.sync.v1';
+const TOMB_KEY='wordtiles.tombs.v1';
+const DOC_KEY='word-tiles';
+const PUSH_DEBOUNCE=1500;
+const PULL_THROTTLE=10000;
+
+function newGid(){
+  try{ if(crypto&&crypto.randomUUID) return crypto.randomUUID(); }catch(e){}
+  return 'g'+Date.now().toString(36)+Math.random().toString(36).slice(2,10);
+}
+
+function readTombs(){
+  try{ return JSON.parse(localStorage.getItem(TOMB_KEY)||'{}')||{}; }catch(e){ return {}; }
+}
+function writeTombs(t){
+  // Forget tombstones older than 90 days so the list cannot grow for ever.
+  const cut=Date.now()-90*24*3600*1000, out={};
+  for(const k in t) if(t[k]>cut) out[k]=t[k];
+  try{ localStorage.setItem(TOMB_KEY, JSON.stringify(out)); }catch(e){}
+  return out;
+}
+function tombstone(gid){ const t=readTombs(); t[gid]=Date.now(); writeTombs(t); }
+
+/* Every saved game currently on this device, with the slot it sits in. */
+function localGames(){
+  const out=[];
+  for(let i=1;i<=SLOTS;i++){
+    const s=readSlot(i);
+    if(!s) continue;
+    if(!s.gid){ s.gid=newGid(); try{ localStorage.setItem(SLOT_KEY(i), JSON.stringify(s)); }catch(e){} }
+    out.push({slot:i, gid:s.gid, t:s.t||0, game:s});
+  }
+  return out;
+}
+
+function writeGames(games){
+  for(let i=1;i<=SLOTS;i++){ try{ localStorage.removeItem(SLOT_KEY(i)); }catch(e){} }
+  games.forEach(g=>{ try{ localStorage.setItem(SLOT_KEY(g.slot), JSON.stringify(g.game)); }catch(e){} });
+}
+
+/**
+ * Merge two sets of saved games. Neither side wins wholesale: every game that
+ * exists on either side and has not been deleted survives, subject to there
+ * being a slot for it. Returns the merged list plus anything that had to be
+ * dropped for want of room.
+ */
+function mergeGames(mine, theirs, tombs){
+  const by={};
+  const consider=(g,origin)=>{
+    if(tombs[g.gid] && tombs[g.gid] > (g.t||0)) return;   // deleted after it was saved
+    const seen=by[g.gid];
+    if(!seen || (g.t||0) > (seen.t||0)) by[g.gid]=Object.assign({}, g, {origin});
+  };
+  mine.forEach(g=>consider(g,'local'));
+  theirs.forEach(g=>consider(g,'remote'));
+
+  // Decide WHICH games to keep before deciding where they sit. Doing it the
+  // other way round lets an older game hold a slot and push a newer one out.
+  const all=Object.values(by).sort((a,b)=>(b.t||0)-(a.t||0));
+  const keep=all.slice(0,SLOTS);
+  const overflow=all.slice(SLOTS);
+
+  // Among the keepers, each game holds the slot it already occupied where it
+  // can, so things stay put for the device that has been using it.
+  const placed=[], taken={};
+  keep.forEach(g=>{
+    const w=g.slot;
+    if(w>=1 && w<=SLOTS && !taken[w]){ taken[w]=1; placed.push(Object.assign({},g,{slot:w})); g.done=1; }
+  });
+  keep.filter(g=>!g.done).forEach(g=>{
+    for(let i=1;i<=SLOTS;i++) if(!taken[i]){ taken[i]=1; placed.push(Object.assign({},g,{slot:i})); break; }
+  });
+
+  placed.sort((a,b)=>a.slot-b.slot);
+  return {games:placed, overflow};
+}
+
+const sync={
+  cfg:null, status:'off', detail:'', timer:null, last:0, busy:false,
+
+  load(){
+    try{ this.cfg=JSON.parse(localStorage.getItem(SYNC_KEY)||'null'); }catch(e){ this.cfg=null; }
+    if(this.cfg){
+      if(typeof this.cfg.rev!=='number') this.cfg.rev=0;
+      if(typeof this.cfg.dirty!=='boolean') this.cfg.dirty=false;
+      if(!this.cfg.device) this.cfg.device='dev-'+newGid().slice(0,6);
+      this.save();
+    }
+    this.status=this.on()?(this.cfg.dirty?'pending':'idle'):'off';
+  },
+  save(){
+    if(this.cfg) localStorage.setItem(SYNC_KEY, JSON.stringify(this.cfg));
+    else localStorage.removeItem(SYNC_KEY);
+  },
+  on(){ return !!(this.cfg&&this.cfg.url&&this.cfg.token); },
+  url(){ return this.cfg.url.replace(/\/+$/,'')+'/v1/doc/'+DOC_KEY; },
+
+  set(status,detail){ this.status=status; this.detail=detail||''; renderSyncBar(); },
+
+  connect(url,token){
+    this.cfg={url:String(url||'').trim(), token:String(token||'').trim(),
+              device:(this.cfg&&this.cfg.device)||('dev-'+newGid().slice(0,6)),
+              rev:0, dirty:localGames().length>0};
+    this.save(); this.set('idle','');
+  },
+  disconnect(){ this.cfg=null; this.save(); this.set('off',''); },
+
+  touch(){
+    if(!this.on()) return;
+    this.cfg.dirty=true; this.save(); this.set('pending','Changes waiting');
+    clearTimeout(this.timer);
+    this.timer=setTimeout(()=>this.push(), PUSH_DEBOUNCE);
+  },
+
+  async req(method, body){
+    const res=await fetch(this.url(),{
+      method,
+      headers:{'Authorization':'Bearer '+this.cfg.token,'Content-Type':'application/json'},
+      body: body?JSON.stringify(body):undefined,
+      cache:'no-store'
+    });
+    let payload=null;
+    try{ payload=await res.json(); }catch(e){}
+    return {ok:res.ok, status:res.status, payload};
+  },
+
+  async pull(opts){
+    if(!this.on()||this.busy) return;
+    const force=opts&&opts.force;
+    if(!force && Date.now()-this.last<PULL_THROTTLE) return;
+    if(!navigator.onLine){ this.set('offline','No connection'); return; }
+
+    this.busy=true; this.last=Date.now(); this.set('syncing','Checking…');
+    try{
+      const res=await this.req('GET');
+      if(res.status===401){ this.set('error','Token rejected'); return; }
+      if(res.status===404){ this.cfg.rev=0; this.cfg.dirty=true; this.save(); this.busy=false; await this.push(); return; }
+      if(!res.ok){ this.set('error','Server error '+res.status); return; }
+
+      const remote=res.payload.data||{};
+      const tombs=writeTombs(Object.assign(readTombs(), remote.deleted||{}));
+      const merged=mergeGames(localGames(), remote.games||[], tombs);
+
+      const changedLocally = JSON.stringify(localGames().map(g=>[g.slot,g.gid,g.t]))
+                          !== JSON.stringify(merged.games.map(g=>[g.slot,g.gid,g.t]));
+      if(changedLocally){
+        writeGames(merged.games);
+        if(document.getElementById('ovl-slots').classList.contains('on')) buildSlots();
+      }
+      this.cfg.rev=res.payload.rev;
+      if(merged.overflow.length){
+        // More saved games exist than there are slots. Keep the newest here,
+        // but do NOT push — that would delete the others from the cloud copy.
+        // Delete a slot to make room and they will come back.
+        this.cfg.dirty=false; this.save();
+        this.set('error', merged.overflow.length+' more saved game'
+          +(merged.overflow.length===1?'':'s')+' in the cloud than there are slots — delete one to bring them down');
+        return;
+      }
+
+      // If the merge produced anything the server has not got, push it back.
+      const remoteSig=JSON.stringify((remote.games||[]).map(g=>[g.gid,g.t]).sort());
+      const mergedSig=JSON.stringify(merged.games.map(g=>[g.gid,g.t]).sort());
+      this.cfg.dirty = this.cfg.dirty || remoteSig!==mergedSig;
+      this.save();
+
+      if(this.cfg.dirty){ this.busy=false; await this.push(); return; }
+      this.cfg.lastSync=new Date().toISOString(); this.save();
+      this.set('idle','Up to date');
+    }catch(e){
+      this.set('error', navigator.onLine?'Could not reach server':'No connection');
+    }finally{ this.busy=false; }
+  },
+
+  async push(){
+    if(!this.on()||this.busy) return;
+    if(!this.cfg.dirty){ this.set('idle','Up to date'); return; }
+    if(!navigator.onLine){ this.set('offline','Will sync when back online'); return; }
+
+    this.busy=true; this.set('syncing','Saving…');
+    try{
+      const res=await this.req('PUT',{
+        baseRev:this.cfg.rev,
+        device:this.cfg.device,
+        data:{games:localGames(), deleted:readTombs()}
+      });
+      if(res.status===401){ this.set('error','Token rejected'); return; }
+      if(res.status===409){
+        // Somebody moved first. Pull, merge, and try again — no prompt needed,
+        // because merging never discards a game.
+        this.cfg.rev=res.payload.rev; this.save();
+        this.busy=false; this.last=0;
+        await this.pull({force:true});
+        return;
+      }
+      if(!res.ok){ this.set('error','Server error '+res.status); return; }
+      this.cfg.rev=res.payload.rev; this.cfg.dirty=false;
+      this.cfg.lastSync=new Date().toISOString(); this.save();
+      this.set('idle','Saved to cloud');
+    }catch(e){
+      this.set('error', navigator.onLine?'Could not reach server':'No connection');
+    }finally{ this.busy=false; }
+  },
+
+  describe(){
+    if(!this.on()) return 'Saved games stay on this device only.';
+    const last=this.cfg.lastSync? 'Last sync '+new Date(this.cfg.lastSync).toLocaleString()+'.' : 'Not yet synced.';
+    const base={idle:'Synced across your devices.', pending:'Changes waiting to be sent.',
+                syncing:'Syncing…', error:'Problem: '+this.detail+'.',
+                offline:'Offline — will catch up later.'}[this.status]||'Connected.';
+    return base+' '+last;
+  }
+};
+
+function syncTouch(){ sync.touch(); }
+
+function renderSyncBar(){
+  const bar=document.getElementById('sync-bar');
+  if(!bar) return;
+  bar.style.display='flex';
+  bar.className='sync-bar s-'+(sync.on()?sync.status:'off');
+  document.getElementById('sync-text').textContent=sync.describe();
+  document.getElementById('sync-btn').textContent=sync.on()?'Sync now':'Set up';
+}
+function syncBarAction(){
+  if(sync.on()){ sync.pull({force:true}).then(()=>sync.push()); }
+  else openSyncSetup();
+}
+function openSyncSetup(){
+  document.getElementById('sync-setup-note').textContent='';
+  document.getElementById('ovl-sync').classList.add('on');
+}
+function closeSyncSetup(){ document.getElementById('ovl-sync').classList.remove('on'); }
+
+async function connectSync(){
+  const url=(document.getElementById('sync-url').value||'').trim();
+  const token=(document.getElementById('sync-token').value||'').trim();
+  const note=document.getElementById('sync-setup-note');
+  if(!/^https:\/\/\S+$/i.test(url)){ note.textContent='Enter the full worker URL, starting with https://'; return; }
+  if(!token){ note.textContent='Enter your token.'; return; }
+  sync.connect(url,token);
+  note.textContent='Connecting…';
+  await sync.pull({force:true});
+  if(sync.status==='error'){ note.textContent=sync.detail; sync.disconnect(); renderSyncBar(); return; }
+  closeSyncSetup();
+  buildSlots(); renderSyncBar();
+}
+
+sync.load();
+if(sync.on()) sync.pull({force:true});
+document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='visible'&&sync.on()) sync.pull(); });
+window.addEventListener('online',()=>{ if(sync.on()) sync.pull({force:true}); });
+window.addEventListener('offline',()=>{ if(sync.on()) sync.set('offline','No connection'); });
+
 if('serviceWorker' in navigator){
   window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js').catch(()=>{}));
 }
