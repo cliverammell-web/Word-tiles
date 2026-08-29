@@ -1,7 +1,16 @@
 /* Word Tiles — offline cache.
-   Bump CACHE whenever you upload a new index.html, or tablets will keep
-   serving the old one. */
-const CACHE = 'word-tiles-v7';
+
+   Page loads are network-first: the app checks for a new index.html on every
+   launch and only falls back to the cache when the network is slow or absent.
+   That means an upload reaches every device on its next launch, with no cache
+   bumping and no clearing of site data.
+
+   index.html is large, but GitHub Pages sends an ETag, so an unchanged file
+   costs a small 304 rather than a full download.
+
+   Static assets below stay cache-first — they are icons and never change. */
+const CACHE = 'word-tiles-v8';
+const NET_TIMEOUT = 4000;   // fall back to the cached app after this
 
 const ASSETS = [
   './index.html',
@@ -31,22 +40,44 @@ self.addEventListener('activate', e => {
   })());
 });
 
+/** Fetch, but give up after ms so a dead connection doesn't hang the launch. */
+function fetchWithTimeout(req, ms) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('timeout')), ms);
+    fetch(req).then(
+      res => { clearTimeout(timer); resolve(res); },
+      err => { clearTimeout(timer); reject(err); }
+    );
+  });
+}
+
 self.addEventListener('fetch', e => {
   const req = e.request;
   if (req.method !== 'GET') return;
-  if (new URL(req.url).origin !== self.location.origin) return;
 
-  // Page loads: cached app first, so it opens with no connection.
+  const url = new URL(req.url);
+  if (url.origin !== self.location.origin) return;   // let sync traffic alone
+
+  // Page loads: newest version wins, cache is the safety net.
   if (req.mode === 'navigate') {
     e.respondWith((async () => {
-      const hit = await caches.match('./index.html');
-      if (hit) return hit;
-      try { return await fetch(req); }
-      catch (err) { return new Response('Word Tiles is not cached yet.', { status: 503 }); }
+      try {
+        const res = await fetchWithTimeout(req, NET_TIMEOUT);
+        if (res && res.ok) {
+          const copy = res.clone();
+          caches.open(CACHE).then(c => c.put('./index.html', copy)).catch(() => {});
+        }
+        return res;
+      } catch (err) {
+        const hit = await caches.match('./index.html');
+        if (hit) return hit;
+        return new Response('Word Tiles is not cached yet.', { status: 503 });
+      }
     })());
     return;
   }
 
+  // Everything else: cache first, since it is only icons and the manifest.
   e.respondWith((async () => {
     const hit = await caches.match(req);
     if (hit) return hit;
