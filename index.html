@@ -1306,7 +1306,8 @@ function openSlots(mode){
     mode==='save' ? 'Save to which slot?' : 'Which game shall we resume?';
   document.getElementById('slot-blurb').textContent =
     mode==='save' ? 'Pick a slot. Saving over one that is already in use will ask first.'
-                  : 'Empty slots are greyed out. The ✕ deletes a saved game.';
+                  : (usedSlots() ? 'Empty slots are greyed out. The ✕ deletes a saved game.'
+                                 : 'Nothing saved on this device yet. Set up sync below to bring your games across.');
   buildSlots();
   renderSyncBar();
   document.getElementById('ovl-slots').classList.add('on');
@@ -1387,7 +1388,13 @@ function writeSlot(n){
 }
 
 function resumeGame(){
-  if(!usedSlots()){ setMsg('No games saved yet. Tap Save game to keep one.','bad'); return; }
+  // With nothing saved there is normally nothing to show — but this screen is
+  // also the only way to reach sync setup, and a device with no saved games is
+  // exactly the one that needs it. So open it anyway when sync is not yet on.
+  if(!usedSlots() && sync.on()){
+    setMsg('No games saved yet. Tap Save game to keep one.','bad');
+    return;
+  }
   openSlots('resume');
 }
 
