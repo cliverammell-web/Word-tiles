@@ -9,7 +9,7 @@
    costs a small 304 rather than a full download.
 
    Static assets below stay cache-first — they are icons and never change. */
-const CACHE = 'word-tiles-v9';
+const CACHE = 'word-tiles-v10';
 const NET_TIMEOUT = 4000;   // fall back to the cached app after this
 
 const ASSETS = [
