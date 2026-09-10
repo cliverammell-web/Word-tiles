@@ -941,6 +941,18 @@ function endGame(finisher, why){
     '<div class="row'+(win===0?' win':'')+'"><span>'+names[0]+'</span><span>'+scores[0]+'</span></div>'+
     '<div class="row'+(win===1?' win':'')+'"><span>'+names[1]+'</span><span>'+scores[1]+'</span></div>'+extra;
   document.getElementById('ovl-end').classList.add('on');
+
+  /* The game is over, so its slot is retired. Leaving it there turns Resume
+     into a replay of a won position. The result is already kept separately
+     in the record line on the opening screen. */
+  if(activeSlot){
+    try{
+      if(activeGid) tombstone(activeGid);
+      localStorage.removeItem(SLOT_KEY(activeSlot));
+    }catch(e){}
+    activeSlot=null; activeGid=null; slotsFullWarned=false;
+    syncTouch();
+  }
 }
 
 async function confirmNew(){
@@ -1283,6 +1295,35 @@ function usedSlots(){
   let n=0;
   for(let i=1;i<=SLOTS;i++) if(readSlot(i)) n++;
   return n;
+}
+
+/* A saved position that is already over. Saves carry no gameOver flag, so
+   this reads the two conditions endGame itself uses: someone has played out
+   with the bag empty, or six scoreless turns have gone by. */
+function finishedState(s){
+  try{
+    if(!s || !Array.isArray(s.racks) || !Array.isArray(s.bag)) return false;
+    if((s.scoreless||0) >= 6) return true;
+    return s.bag.length===0 && (!s.racks[0].length || !s.racks[1].length);
+  }catch(e){ return false; }
+}
+
+/* Clear out finished games. Needed for saves made before games began
+   retiring themselves, and for one arriving from another device by sync. */
+function sweepFinishedSlots(){
+  let swept=false;
+  for(let i=1;i<=SLOTS;i++){
+    const s=readSlot(i);
+    if(!s || !finishedState(s)) continue;
+    try{
+      if(s.gid) tombstone(s.gid);
+      localStorage.removeItem(SLOT_KEY(i));
+      if(activeSlot===i){ activeSlot=null; activeGid=null; }
+      swept=true;
+    }catch(e){}
+  }
+  if(swept) syncTouch();
+  return swept;
 }
 
 /* Carry a game saved by the older single-slot version into slot 1. */
@@ -1722,6 +1763,7 @@ const sync={
                           !== JSON.stringify(merged.games.map(g=>[g.slot,g.gid,g.t]));
       if(changedLocally){
         writeGames(merged.games);
+        sweepFinishedSlots();   // a finished game may have come from another device
         if(document.getElementById('ovl-slots').classList.contains('on')) buildSlots();
       }
       this.cfg.rev=res.payload.rev;
@@ -1834,6 +1876,7 @@ if('serviceWorker' in navigator){
 }
 
 migrateSave();
+sweepFinishedSlots();
 newGame();
 if(window.ResizeObserver) new ResizeObserver(sizeBoard).observe(bView());
 else window.addEventListener('resize', sizeBoard);
