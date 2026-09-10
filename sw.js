@@ -9,10 +9,11 @@
    costs a small 304 rather than a full download.
 
    Static assets below stay cache-first — they are icons and never change. */
-const CACHE = 'word-tiles-v8';
+const CACHE = 'word-tiles-v9';
 const NET_TIMEOUT = 4000;   // fall back to the cached app after this
 
 const ASSETS = [
+  './',
   './index.html',
   './manifest.json',
   './icon-192.png',
@@ -40,6 +41,16 @@ self.addEventListener('activate', e => {
   })());
 });
 
+/** Only replace the cached app with something that really is the app.
+    A captive portal (hotel, airport, plane wifi) answers with a valid 200
+    HTML login page. Without this check that page gets cached as index.html
+    and is then served to you offline, in place of the game. */
+function looksLikeApp(res) {
+  return res && res.ok
+      && res.type === 'basic'
+      && (res.headers.get('content-type') || '').includes('text/html');
+}
+
 /** Fetch, but give up after ms so a dead connection doesn't hang the launch. */
 function fetchWithTimeout(req, ms) {
   return new Promise((resolve, reject) => {
@@ -63,7 +74,7 @@ self.addEventListener('fetch', e => {
     e.respondWith((async () => {
       try {
         const res = await fetchWithTimeout(req, NET_TIMEOUT);
-        if (res && res.ok) {
+        if (looksLikeApp(res)) {
           const copy = res.clone();
           caches.open(CACHE).then(c => c.put('./index.html', copy)).catch(() => {});
         }
